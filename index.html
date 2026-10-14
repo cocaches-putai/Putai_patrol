@@ -1,5 +1,5 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>巡堂紀錄</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Noto+Serif+TC:wght@600;700&display=swap"><style id="app-style">
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>巡堂紀錄</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Noto+Serif+TC:wght@600;700&display=swap"><script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script><style id="app-style">
 /* 設計：手機直向單欄，頂部固定「現在巡堂」資訊條 + 分頁籤（填寫／歷史），卡片式清單 */
 :root{
   --bg:#f6f2e9; --surface:#ffffff; --surface-2:#eee6d4; --ink:#2a2620; --ink-soft:#766d5c;
@@ -900,6 +900,13 @@ function cleanLegacyName(raw){
 }
 function parseLegacyTimestamp(raw){
   if(!raw) return null;
+  // Excel/試算表匯入（xlsx）：SheetJS 用 cellDates:true 讀出的日期儲存格是 Date 物件，
+  // 而且它的 UTC 欄位（getUTCFullYear 等）直接對應試算表上看到的年月日時分秒（試算表日期本身沒有時區概念），
+  // 要用 getUTC* 讀，不能用本地時區的 getFullYear 等，不然會因為瀏覽器時區設定跑掉。
+  if(raw instanceof Date){
+    if(isNaN(raw.getTime())) return null;
+    return {y:raw.getUTCFullYear(), mo:raw.getUTCMonth()+1, d:raw.getUTCDate(), h:raw.getUTCHours(), mi:raw.getUTCMinutes(), s:raw.getUTCSeconds(), ms:raw.getUTCMilliseconds()};
+  }
   var s = String(raw).trim();
   var m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?/);
   if(!m) return null;
@@ -925,7 +932,7 @@ function splitLegacyChecklist(raw, validList, warnings, rowNum, label){
 }
 function parseLegacyRow(cols, rowNum, warnings, unmappedSet){
   var get = function(i){ return cols[i] != null ? String(cols[i]) : ''; };
-  var ts = parseLegacyTimestamp(get(0));
+  var ts = parseLegacyTimestamp(cols[0]); // 不要先經過 get()：xlsx 來源的時間戳記是 Date 物件，stringify 後就解析不出來了
   if(!ts) return null;
   var category = get(4).trim();
   var className = (get(2).trim() + get(3).trim()).trim();
@@ -987,19 +994,55 @@ function parseLegacyRow(cols, rowNum, warnings, unmappedSet){
 function handleImportFile(text, fileName){
   try{
     var rows = parseCsv(text);
+    processImportRows(rows, fileName);
+  }catch(e){
+    uiState.importState = {error: '解析檔案時發生問題：' + (e && e.message ? e.message : String(e))};
+    render();
+  }
+}
+function handleImportXlsx(arrayBuffer, fileName){
+  try{
+    if(typeof XLSX === 'undefined'){
+      uiState.importState = {error:'Excel 解析功能載入失敗（可能是網路問題），請重新整理頁面後再試一次，或改上傳 CSV 檔。'};
+      render(); return;
+    }
+    // cellDates:true 讓時間戳記欄位直接變成 Date 物件（見 parseLegacyTimestamp 的說明），
+    // 不然預設會讀成 Excel 內部的序列數字，沒辦法直接解析出年月日時分秒。
+    var wb = XLSX.read(arrayBuffer, {type:'array', cellDates:true});
+    var sheetName = wb.SheetNames.indexOf('表單回應 1') !== -1 ? '表單回應 1' : wb.SheetNames[0];
+    var ws = wb.Sheets[sheetName];
+    var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+    processImportRows(rows, fileName);
+  }catch(e){
+    uiState.importState = {error: '解析 Excel 檔案時發生問題：' + (e && e.message ? e.message : String(e))};
+    render();
+  }
+}
+// legacy id 格式是 'legacy-'+YYYYMMDD+'T'+HHMMSS+微秒（6碼）。秒以下的微秒部分是從試算表的日期
+// 數值換算回來的，CSV（Python/openpyxl）跟 Excel（瀏覽器端 SheetJS）兩種讀法換算同一個儲存格，
+// 偶爾會有 ±1 毫秒的浮點數捨入差異（兩套程式各自的日期序號轉換邏輯不同，無法完全消除）。
+// 如果只用完整 id 字串比對，同一筆舊紀錄換一種檔案格式重新匯入，可能因為這 1 毫秒差異被誤判成
+// 「新資料」而重複寫入。所以比對是否已匯入過時，忽略微秒部分、只看到「秒」為止；id 本身（含微秒）
+// 仍然完整保留、正常寫入新紀錄，不影響既有資料格式。
+function legacySecondKey(id){
+  return (typeof id === 'string' && id.indexOf('legacy-') === 0 && id.length > 6) ? id.slice(0, -6) : id;
+}
+function processImportRows(rows, fileName){
+  try{
     if(!rows.length){ uiState.importState = {error:'檔案是空的，或無法解析出任何資料列。'}; render(); return; }
     var dataRows = rows.slice(1);
     var warnings = [], unmappedSet = {};
-    var existingIds = {};
-    RECORDS.forEach(function(r){ existingIds[r.id] = true; });
+    var existingIds = {}, existingSecondKeys = {};
+    RECORDS.forEach(function(r){ existingIds[r.id] = true; existingSecondKeys[legacySecondKey(r.id)] = true; });
     var newRows = [], dupCount = 0, skippedCount = 0;
     dataRows.forEach(function(cols, idx){
       var rowNum = idx + 2;
       if(!cols.length || cols.every(function(c){ return !c || !String(c).trim(); })) return;
       var rec = parseLegacyRow(cols, rowNum, warnings, unmappedSet);
       if(!rec){ skippedCount++; return; }
-      if(existingIds[rec.id]){ dupCount++; return; }
+      if(existingIds[rec.id] || existingSecondKeys[legacySecondKey(rec.id)]){ dupCount++; return; }
       existingIds[rec.id] = true;
+      existingSecondKeys[legacySecondKey(rec.id)] = true;
       newRows.push(rec);
     });
     uiState.importState = {
@@ -1024,8 +1067,8 @@ function importHtml(){
   var st = uiState.importState;
   var html = '<div class="card">';
   html += '<h2 style="font-size:16px;margin-bottom:10px;">匯入舊版 Google 表單紀錄</h2>';
-  html += '<div class="hint" style="margin-bottom:10px;line-height:1.6;">如果有同事繼續使用舊的 Google 表單巡堂，把表單回覆試算表（「表單回應 1」工作表）下載成 CSV 檔後上傳到這裡即可。系統會用每筆的原始填寫時間自動判斷是否已經匯入過，只會把新的紀錄加進來，不會重複。</div>';
-  html += '<input type="file" id="import-file-input" accept=".csv,text/csv">';
+  html += '<div class="hint" style="margin-bottom:10px;line-height:1.6;">如果有同事繼續使用舊的 Google 表單巡堂，把表單回覆試算表（「表單回應 1」工作表）下載後上傳到這裡即可，Excel（.xlsx）或 CSV 檔都可以，不用特別轉檔。系統會用每筆的原始填寫時間自動判斷是否已經匯入過，只會把新的紀錄加進來，不會重複。</div>';
+  html += '<input type="file" id="import-file-input" accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">';
   if(st && st.error){
     html += '<div class="record-note" style="color:var(--bad);margin-top:10px;">'+esc(st.error)+'</div>';
   }else if(st && st.parsed){
@@ -1137,10 +1180,16 @@ function bindInputs(){
     importFileInput.addEventListener('change', function(){
       var file = importFileInput.files && importFileInput.files[0];
       if(!file) return;
+      var isXlsx = /\.xlsx?$/i.test(file.name);
       var reader = new FileReader();
-      reader.onload = function(){ handleImportFile(String(reader.result), file.name); };
       reader.onerror = function(){ uiState.importState = {error:'檔案讀取失敗，請重新選擇檔案。'}; render(); };
-      reader.readAsText(file, 'utf-8');
+      if(isXlsx){
+        reader.onload = function(){ handleImportXlsx(reader.result, file.name); };
+        reader.readAsArrayBuffer(file);
+      }else{
+        reader.onload = function(){ handleImportFile(String(reader.result), file.name); };
+        reader.readAsText(file, 'utf-8');
+      }
     });
   }
 }
