@@ -72,6 +72,7 @@ input::placeholder,textarea::placeholder{color:var(--ink-soft);}
 .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:999px;font-weight:700;}
 .badge-sched{background:var(--good-soft);color:var(--good);}
 .badge-adhoc{background:var(--warn-soft);color:var(--warn);}
+.badge-secondlang{background:var(--accent-soft);color:var(--accent-ink);}
 .record-name{font-size:13.5px;margin-top:2px;}
 .record-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;}
 .tag{font-size:11.5px;padding:2px 8px;border-radius:999px;}
@@ -300,7 +301,7 @@ var uiState = {
   toast: null,
   editingId: null,
   // 歷史紀錄預設先篩當月（避免一次把全部紀錄都帶進畫面），使用者仍可自行清空月份篩選看全部
-  filter: {month: taipeiNow().dateStr.slice(0,7), className:'', name:''},
+  filter: {month: taipeiNow().dateStr.slice(0,7), className:'', name:'', dept:''},
   form: null,
   importState: null,
   loading: false,     // 正在向 Google 試算表資料庫要最新資料
@@ -335,7 +336,7 @@ function freshForm(prefillSuggest){
 function refreshSubjectTeacherSuggestion(){
   var f = uiState.form;
   var info = dateToInfo(f.date);
-  var className = f.className === '__other__' ? null : f.className;
+  var className = (f.className === '__other__' || f.className === '__secondlang__') ? null : f.className;
   var hit = (info && info.valid && className) ? lookupSubjectTeacher(className, info.weekType, info.day, f.period) : null;
   if(!f.subjectTouched){
     f.subject = (hit && hit.subject) ? hit.subject : '';
@@ -427,7 +428,8 @@ function onSubmit(){
   var f = uiState.form;
   var info = dateToInfo(f.date);
   if(!info || !info.valid){ showToast('這個日期不在本學期課表範圍內，請重新選擇日期。'); return; }
-  var className = f.className === '__other__' ? (f.classOther||'').trim() : f.className;
+  var isFreeLocation = (f.grade === '__other__' || f.grade === '__secondlang__');
+  var className = isFreeLocation ? (f.classOther||'').trim() : f.className;
   if(!className){ showToast('請選擇或填寫巡堂的班級／地點。'); return; }
   var patrolName = (f.patrolName||'').trim();
   if(!patrolName){ showToast('請填寫巡堂人姓名。'); return; }
@@ -444,6 +446,7 @@ function onSubmit(){
     subject: (f.subject||'').trim(),
     subjectTeacher: (f.subjectTeacher||'').trim(),
     pros: proList, cons: conList, score: f.score, note: (f.note||'').trim(),
+    category: f.grade === '__secondlang__' ? '二外' : '',
     creatorToken: uiState.editingId ? (findRecord(uiState.editingId)||{}).creatorToken : DEVICE_TOKEN
   };
   var msg = uiState.editingId ? '已更新這筆巡堂紀錄。' : '已送出巡堂紀錄。';
@@ -465,12 +468,13 @@ function findRecord(id){
 function startEdit(id){
   var r = findRecord(id);
   if(!r) return;
-  var isClassKnown = ALL_CLASSES_FLAT.indexOf(r.className) !== -1;
+  var isSecondLang = r.category === '二外';
+  var isClassKnown = !isSecondLang && ALL_CLASSES_FLAT.indexOf(r.className) !== -1;
   uiState.editingId = id;
   uiState.form = {
     date: r.date, period: r.period,
-    grade: isClassKnown ? r.className.slice(0,2) : '__other__',
-    className: isClassKnown ? r.className : '__other__',
+    grade: isSecondLang ? '__secondlang__' : (isClassKnown ? r.className.slice(0,2) : '__other__'),
+    className: isSecondLang ? '__secondlang__' : (isClassKnown ? r.className : '__other__'),
     classOther: isClassKnown ? '' : r.className,
     patrolName: r.patrolName,
     subject: r.subject || '', subjectTouched: true,
@@ -551,6 +555,8 @@ function filteredRecords(){
     if(f.month && r.date.slice(0,7) !== f.month) return false;
     if(f.className && r.className !== f.className) return false;
     if(f.name && r.patrolName.indexOf(f.name) === -1) return false;
+    if(f.dept === 'intl' && r.className.indexOf('辛') === -1) return false;
+    if(f.dept === 'secondlang' && r.category !== '二外') return false;
     return true;
   }).sort(function(a,b){ return (b.date+b.period).localeCompare(a.date+a.period); });
 }
@@ -562,6 +568,7 @@ function staffOptionsHtml(){
 function gradeOptionsHtml(selected){
   var opts = '<option value="">請選擇年段</option>';
   opts += GRADES.map(function(g){ return '<option value="'+g+'"'+(g===selected?' selected':'')+'>'+g+'</option>'; }).join('');
+  opts += '<option value="__secondlang__"'+(selected==='__secondlang__'?' selected':'')+'>二外</option>';
   opts += '<option value="__other__"'+(selected==='__other__'?' selected':'')+'>其他（自行輸入地點）</option>';
   return opts;
 }
@@ -609,16 +616,18 @@ function formHtml(){
 
   html += '<div class="field"><label>班級／地點</label><div class="row2">';
   html += '<select id="f-grade" data-bind="grade">'+gradeOptionsHtml(f.grade)+'</select>';
-  if(f.grade && f.grade !== '__other__'){
+  if(f.grade && f.grade !== '__other__' && f.grade !== '__secondlang__'){
     html += '<select id="f-class" data-bind="className">'+classOptionsHtmlForGrade(f.grade, f.className)+'</select>';
   }
   html += '</div>';
   if(f.grade === '__other__'){
     html += '<input type="text" id="f-class-other" data-bind="classOther" placeholder="請輸入地點，例如：寢室、餐廳" value="'+esc(f.classOther)+'" style="margin-top:8px;">';
+  }else if(f.grade === '__secondlang__'){
+    html += '<input type="text" id="f-class-other" data-bind="classOther" placeholder="請輸入二外課程／班別，例如：日文一" value="'+esc(f.classOther)+'" style="margin-top:8px;">';
   }
   html += '</div>';
 
-  var className2 = f.className === '__other__' ? null : f.className;
+  var className2 = (f.className === '__other__' || f.className === '__secondlang__') ? null : f.className;
   var schedHit = (info && info.valid && className2) ? lookupSubjectTeacher(className2, info.weekType, info.day, f.period) : null;
 
   html += '<div class="field"><label>課程名稱（選填）</label><input type="text" id="f-subject" data-bind="subject" placeholder="自動帶出課表排定課程，調代課時可自行修改" value="'+esc(f.subject)+'">';
@@ -693,7 +702,8 @@ function recordHtml(r){
   var periodLabel = (PERIODS.filter(function(p){return p.key===r.period;})[0]||{}).label || ('第'+r.period+'節');
   var md = r.date.slice(5).replace('-','/');
   var html = '<div class="record">';
-  html += '<div class="record-head"><span class="record-class">'+esc(r.className)+courseLineHtml(r)+'</span><span class="record-when">'+md+'（'+r.day+'）'+periodLabel+'</span></div>';
+  var deptBadge = r.category === '二外' ? ' <span class="badge badge-secondlang">二外</span>' : '';
+  html += '<div class="record-head"><span class="record-class">'+esc(r.className)+deptBadge+courseLineHtml(r)+'</span><span class="record-when">'+md+'（'+r.day+'）'+periodLabel+'</span></div>';
   html += '<div class="record-name">'+esc(r.patrolName)+' <span class="badge '+(r.scheduled?'badge-sched':'badge-adhoc')+'">'+(r.scheduled?'輪值人員':'主動巡堂')+'</span>'+(r.score?' ・評分 '+r.score+'（'+SCORE_LABELS[r.score]+'）':'')+'</div>';
   if((r.pros&&r.pros.length)||(r.cons&&r.cons.length)){
     html += '<div class="record-tags">';
@@ -716,6 +726,11 @@ function historyHtml(){
   html += '<input type="month" id="flt-month" data-filter="month" value="'+esc(uiState.filter.month)+'">';
   html += '<select id="flt-class" data-filter="className"><option value="">全部班級</option>'+ALL_CLASSES_FLAT.map(function(c){return '<option value="'+esc(c)+'"'+(c===uiState.filter.className?' selected':'')+'>'+esc(c)+'</option>';}).join('')+'</select>';
   html += '<input type="text" id="flt-name" data-filter="name" placeholder="巡堂人姓名" value="'+esc(uiState.filter.name)+'">';
+  html += '<select id="flt-dept" data-filter="dept">';
+  html += '<option value="">全部部門</option>';
+  html += '<option value="intl"'+(uiState.filter.dept==='intl'?' selected':'')+'>國際部（辛班）</option>';
+  html += '<option value="secondlang"'+(uiState.filter.dept==='secondlang'?' selected':'')+'>外語中心（二外）</option>';
+  html += '</select>';
   html += '</div>';
   html += '<div class="export-bar"><button type="button" class="btn-ghost" data-action="export-csv">匯出 CSV（'+list.length+' 筆）</button><button type="button" class="btn-ghost" data-action="refresh-data" '+(uiState.loading?'disabled':'')+'>重新整理</button></div>';
   if(list.length === 0){
@@ -1156,6 +1171,8 @@ function bindInputs(){
         var g = uiState.form.grade;
         if(g === '__other__'){
           uiState.form.className = '__other__';
+        }else if(g === '__secondlang__'){
+          uiState.form.className = '__secondlang__';
         }else{
           var list = CLASSES_BY_GRADE[g] || [];
           if(list.indexOf(uiState.form.className) === -1){ uiState.form.className = ''; }
