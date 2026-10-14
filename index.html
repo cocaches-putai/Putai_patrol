@@ -128,6 +128,7 @@ function fetchRecordsFromServer(isManualRefresh){
       RECORDS = resp.records;
       uiState.loading = false;
       uiState.syncError = null;
+      uiState.initialLoadDone = true;
       render();
       if(isManualRefresh) showToast('已更新為最新資料。');
     }else{
@@ -136,6 +137,7 @@ function fetchRecordsFromServer(isManualRefresh){
   }).catch(function(err){
     uiState.loading = false;
     uiState.syncError = '無法連線到巡堂紀錄資料庫，目前顯示的是上次連線成功時的資料。';
+    uiState.initialLoadDone = true;
     render();
     if(isManualRefresh) showToast('更新失敗，請確認網路連線後再試一次。');
   });
@@ -306,7 +308,11 @@ var uiState = {
   importState: null,
   loading: false,     // 正在向 Google 試算表資料庫要最新資料
   syncing: false,     // 正在送出/編輯/刪除紀錄（等待資料庫回應）
-  syncError: null      // 連不到資料庫時的提示訊息（非阻斷性，仍可操作本機畫面）
+  syncError: null,     // 連不到資料庫時的提示訊息（非阻斷性，仍可操作本機畫面）
+  // 剛開啟網頁時 RECORDS 是發布當下內嵌的舊快照（筆數早就過時了），在第一次向資料庫要資料
+  // 有結果（不管成功或失敗）之前，畫面上不顯示筆數，避免使用者誤以為那是即時筆數。
+  // 之後手動按「重新整理」不受這個影響，一樣照舊維持原本畫面、更新完才整批換掉。
+  initialLoadDone: false
 };
 
 function freshForm(prefillSuggest){
@@ -1130,7 +1136,8 @@ function render(){
   html += nowBannerHtml();
   html += '<div class="tabs">';
   html += '<button type="button" class="tab-btn" aria-selected="'+(uiState.tab==='new')+'" data-action="set-tab" data-tab="new">填寫巡堂</button>';
-  html += '<button type="button" class="tab-btn" aria-selected="'+(uiState.tab==='history')+'" data-action="set-tab" data-tab="history">歷史紀錄（'+RECORDS.length+'）</button>';
+  var historyLabel = uiState.initialLoadDone ? ('歷史紀錄（'+RECORDS.length+'）') : '歷史紀錄（讀取中…）';
+  html += '<button type="button" class="tab-btn" aria-selected="'+(uiState.tab==='history')+'" data-action="set-tab" data-tab="history">'+historyLabel+'</button>';
   html += '<button type="button" class="tab-btn" aria-selected="'+(uiState.tab==='overview')+'" data-action="set-tab" data-tab="overview">總覽</button>';
   html += '<button type="button" class="tab-btn" aria-selected="'+(uiState.tab==='import')+'" data-action="set-tab" data-tab="import">匯入舊紀錄</button>';
   html += '</div></div>';
