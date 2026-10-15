@@ -877,6 +877,13 @@ function computeTeacherSummary(records){
 // scheduled 欄位（date+period 都吻合、且 patrolName 跟輪值表當天該節次的人一致才會是 true），
 // 不用再重新比對一次文字是否相同，邏輯跟畫面上「輪值人員／主動巡堂」badge 是同一套標準。
 // monthStr 給 'YYYY-MM' 只掃那個月；留空掃整個學期（但一樣不會掃到還沒發生的未來）。
+//
+// 巡堂排班實際上是「兩節一組」（輪值表資料本身也印證這點：同一天同一人永遠連續排兩節，
+// 1-2節、3-4節、5-6節、7-8節），只要這兩節裡有任何一節送出巡堂紀錄就算這組巡堂完成，
+// 不是每一節都要分開送。所以這裡要用「節次組」而不是逐節去跟巡堂紀錄比對，
+// 不然兩節其實只巡一次，卻會被誤判成少了一節、多算一倍的未巡堂次數。
+var PERIOD_PAIRS = [['1','2'],['3','4'],['5','6'],['7','8']];
+function periodByKey(key){ return PERIODS.filter(function(p){ return p.key === key; })[0]; }
 function computeMissedPatrols(monthStr){
   var today = taipeiNow().dateStr;
   var nowHHMM = taipeiNow().hhmm;
@@ -906,18 +913,20 @@ function computeMissedPatrols(monthStr){
     var dateStr = formatISODateUTC(cursor);
     var info = dateToInfo(dateStr);
     if(info && info.valid){
-      PERIODS.forEach(function(p){
-        var duty = dutyFor(info.weekType, info.day, p.key);
-        if(!duty) return; // 這節沒有排定巡堂人員，不算
-        if(dateStr === today && p.end > nowHHMM) return; // 今天還沒到的節次不算
-        if(!scheduledSet[dateStr + '|' + p.key]){
-          missed.push({date: dateStr, day: info.day, period: p.key, periodLabel: p.label, weekType: info.weekType, duty: duty});
+      PERIOD_PAIRS.forEach(function(pair){
+        var duty = dutyFor(info.weekType, info.day, pair[0]) || dutyFor(info.weekType, info.day, pair[1]);
+        if(!duty) return; // 這個節次組沒有排定巡堂人員，不算
+        var p2 = periodByKey(pair[1]);
+        if(dateStr === today && p2.end > nowHHMM) return; // 這組節次今天還沒下課，不算
+        var fulfilled = scheduledSet[dateStr + '|' + pair[0]] || scheduledSet[dateStr + '|' + pair[1]];
+        if(!fulfilled){
+          missed.push({date: dateStr, day: info.day, periodFrom: pair[0], periodLabel: '第'+pair[0]+'-'+pair[1]+'節', weekType: info.weekType, duty: duty});
         }
       });
     }
     cursor = addDaysUTC(cursor, 1);
   }
-  missed.sort(function(a,b){ return (b.date + b.period).localeCompare(a.date + a.period); });
+  missed.sort(function(a,b){ return (b.date + b.periodFrom).localeCompare(a.date + a.periodFrom); });
   return missed;
 }
 // 未巡堂清單如果照節次一筆一筆列，一個月下來（輪值表幾乎每節都排人）很容易上百筆、看了反而抓不到重點。
@@ -929,12 +938,12 @@ function groupMissedByPerson(missedList){
     var key = it.duty.name + '|' + it.duty.dept + '|' + it.duty.title;
     var e = byPerson[key] = byPerson[key] || {name: it.duty.name, dept: it.duty.dept, title: it.duty.title, count: 0, lastItem: null};
     e.count++;
-    if(!e.lastItem || (it.date + it.period) > (e.lastItem.date + e.lastItem.period)) e.lastItem = it;
+    if(!e.lastItem || (it.date + it.periodFrom) > (e.lastItem.date + e.lastItem.periodFrom)) e.lastItem = it;
   });
   var list = Object.keys(byPerson).map(function(k){ return byPerson[k]; });
   list.sort(function(a,b){
     if(b.count !== a.count) return b.count - a.count;
-    return (b.lastItem.date + b.lastItem.period).localeCompare(a.lastItem.date + a.lastItem.period);
+    return (b.lastItem.date + b.lastItem.periodFrom).localeCompare(a.lastItem.date + a.lastItem.periodFrom);
   });
   return list;
 }
