@@ -108,9 +108,26 @@ var ROSTER = JSON.parse(document.getElementById('roster-data').textContent);
 var CLASSES = JSON.parse(document.getElementById('class-data').textContent);
 var CHECKLIST = JSON.parse(document.getElementById('checklist-data').textContent);
 var CLASS_GRIDS = JSON.parse(document.getElementById('class-grids-data').textContent);
+// Google 試算表裡沒填評分的儲存格，後端 doGet 會讀成空字串 ''，不是 null／undefined
+// （Apps Script 對空白儲存格就是回傳 ''）。但前端表單新建紀錄時沒選評分存的是 null
+// （見 uiState.form.score 初始值）。這兩種「沒有評分」的表示法不一致，如果不統一，
+// 任何用 "r.score != null" 判斷有沒有評分的地方都會把 '' 誤判成「有評分」，
+// 之後 0+'' 這種運算會讓數字悄悄變成字串、跟後面的數字字串接在一起，
+// 總覽頁籤平均分數就是因為這樣跑出 3.77e+116 這種異常大的數字。
+// 統一在「資料進來的這一刻」就把沒評分的狀況全部正規化成 null，後面全部程式碼都不用再各自處理這個落差。
+function normalizeRecords(list){
+  return (list || []).map(function(r){
+    if(r.score === '' || r.score === undefined || r.score === null || isNaN(Number(r.score))){
+      r.score = null;
+    }else{
+      r.score = Number(r.score);
+    }
+    return r;
+  });
+}
 // RECORDS 一開始先用發布當下內嵌的快照（離線/連不到資料庫時的備援），
 // 頁面載入後會立刻改抓 Google 試算表資料庫的最新資料覆蓋過去（見 fetchRecordsFromServer）。
-var RECORDS = JSON.parse(document.getElementById('patrol-records').textContent);
+var RECORDS = normalizeRecords(JSON.parse(document.getElementById('patrol-records').textContent));
 
 // ============ 巡堂紀錄資料庫（Google 試算表 + Apps Script）============
 // 真正的資料庫已經搬到 Google 試算表，這個網址是巡堂紀錄系統讀寫資料庫用的 API。
@@ -134,7 +151,7 @@ function fetchRecordsFromServer(isManualRefresh){
   render();
   return apiGet().then(function(resp){
     if(resp && resp.ok && Array.isArray(resp.records)){
-      RECORDS = resp.records;
+      RECORDS = normalizeRecords(resp.records);
       uiState.loading = false;
       uiState.syncError = null;
       uiState.initialLoadDone = true;
@@ -870,8 +887,12 @@ function overviewStatsHtml(){
   var today = taipeiNow().dateStr;
   var thisMonth = today.slice(0,7);
   var monthRecords = RECORDS.filter(function(r){ return r.date.slice(0,7) === thisMonth; });
-  var monthScored = monthRecords.filter(function(r){ return r.score != null; });
-  var monthAvg = monthScored.length ? (monthScored.reduce(function(s,r){ return s+r.score; }, 0) / monthScored.length) : null;
+  // 「本月平均分數」改掉了：每位老師、每堂課的狀況本來就不一樣，混在一起平均沒有實際意義，
+  // 改成「近4週重複示警老師數」──同一位老師近4週內累計 >= ATTENTION_REPEAT_THRESHOLD 次問題，
+  // 直接對應「有幾位老師需要我親自跟進」，比一個抽象的平均分數更能回答使用者真正在意的事。
+  var repeatTeacherCount = computeTeacherSummary().filter(function(e){
+    return e.recentIssueCount >= ATTENTION_REPEAT_THRESHOLD;
+  }).length;
   var attentionRecentCount = computeAttention().filter(function(it){
     var ageDays = daysBetweenISO(it.record.date, today);
     return ageDays >= 0 && ageDays <= ATTENTION_WINDOW_DAYS;
@@ -883,7 +904,7 @@ function overviewStatsHtml(){
   var deptPctText = '普通班 '+pct(deptCounts.regular)+'% · 國際部 '+pct(deptCounts.intl)+'% · 外語中心 '+pct(deptCounts.secondlang)+'%';
   var html = '<div class="card"><div class="stat-grid">';
   html += statTileHtml('本月巡堂次數', monthRecords.length);
-  html += statTileHtml('本月平均分數', monthAvg!=null ? monthAvg.toFixed(1) : '-');
+  html += statTileHtml('近4週重複示警老師數', repeatTeacherCount);
   html += statTileHtml('待關注（近4週）', attentionRecentCount);
   html += statTileHtml('部門占比（累計）', deptPctText, 'small');
   html += '</div></div>';
