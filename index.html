@@ -883,6 +883,11 @@ function computeTeacherSummary(records){
 // 不是每一節都要分開送。所以這裡要用「節次組」而不是逐節去跟巡堂紀錄比對，
 // 不然兩節其實只巡一次，卻會被誤判成少了一節、多算一倍的未巡堂次數。
 var PERIOD_PAIRS = [['1','2'],['3','4'],['5','6'],['7','8']];
+// 未巡堂清單正式上線前的資料不算數：那時候系統還沒正式推行，同仁可能根本不知道
+// 要用這套工具送紀錄，拿那段時間的「未巡堂」去認定會造成不必要的誤解/壓力。
+// 2026-10-13 是巡堂紀錄從 Cowork Artifact 搬到 GitHub Pages 正式上線、同仁開始實際填寫的日期，
+// 只從這天開始算未巡堂（之前不管是舊 Artifact 時期還是更早都不計入）。
+var MISSED_PATROL_START_DATE = '2026-10-13';
 function periodByKey(key){ return PERIODS.filter(function(p){ return p.key === key; })[0]; }
 function computeMissedPatrols(monthStr){
   var today = taipeiNow().dateStr;
@@ -897,6 +902,7 @@ function computeMissedPatrols(monthStr){
     rangeEnd = SEMESTER_END;
   }
   if(rangeStart < SEMESTER_START) rangeStart = SEMESTER_START;
+  if(rangeStart < MISSED_PATROL_START_DATE) rangeStart = MISSED_PATROL_START_DATE;
   if(rangeEnd > SEMESTER_END) rangeEnd = SEMESTER_END;
   if(rangeEnd > today) rangeEnd = today; // 還沒到的日期不算
   if(rangeStart > rangeEnd) return [];
