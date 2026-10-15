@@ -336,6 +336,7 @@ var uiState = {
   // 維持原本「本月／近4週／全部累計」各自的既有定義不變，不跟著這個篩選走。
   overviewMonth: taipeiNow().dateStr.slice(0,7),
   overviewShowAllAttention: false, // 待關注清單預設只顯示近 4 週，這個設 true 才會顯示全部（只有「全部月份」時才看得到這個按鈕；選了特定月份就直接顯示該月全部，不需要展開）
+  overviewShowMissedDetail: false, // 未巡堂清單預設只顯示「依人員彙整」的小表，這個設 true 才會展開逐節明細清單（避免一個月上百筆排成一直條看不懂）
   form: null,
   importState: null,
   loading: false,     // 正在向 Google 試算表資料庫要最新資料
@@ -919,6 +920,24 @@ function computeMissedPatrols(monthStr){
   missed.sort(function(a,b){ return (b.date + b.period).localeCompare(a.date + a.period); });
   return missed;
 }
+// 未巡堂清單如果照節次一筆一筆列，一個月下來（輪值表幾乎每節都排人）很容易上百筆、看了反而抓不到重點。
+// 改成先依「應巡堂人員」彙整成一張小表（誰漏了幾次、最近一次漏什麼時候），一眼就看得出要提醒誰；
+// 逐節的明細收在「顯示明細清單」展開按鈕後面，需要時才看。
+function groupMissedByPerson(missedList){
+  var byPerson = {};
+  missedList.forEach(function(it){
+    var key = it.duty.name + '|' + it.duty.dept + '|' + it.duty.title;
+    var e = byPerson[key] = byPerson[key] || {name: it.duty.name, dept: it.duty.dept, title: it.duty.title, count: 0, lastItem: null};
+    e.count++;
+    if(!e.lastItem || (it.date + it.period) > (e.lastItem.date + e.lastItem.period)) e.lastItem = it;
+  });
+  var list = Object.keys(byPerson).map(function(k){ return byPerson[k]; });
+  list.sort(function(a,b){
+    if(b.count !== a.count) return b.count - a.count;
+    return (b.lastItem.date + b.lastItem.period).localeCompare(a.lastItem.date + a.lastItem.period);
+  });
+  return list;
+}
 function missedItemHtml(it){
   var md = it.date.slice(5).replace('-', '/');
   var html = '<div class="record">';
@@ -1019,8 +1038,32 @@ function overviewHtml(){
 
   html += '<div class="card">';
   html += '<h2 style="font-size:16px;margin-bottom:10px;">未巡堂清單</h2>';
-  html += '<div class="hint" style="margin-bottom:10px;">輪值表上排定要巡堂、但時間已經過了卻找不到對應巡堂紀錄的節次。</div>';
-  html += missedPatrols.length ? missedPatrols.map(missedItemHtml).join('') : '<div class="empty">這個範圍內沒有漏巡的節次。</div>';
+  html += '<div class="hint" style="margin-bottom:10px;">輪值表上排定要巡堂、但時間已經過了卻找不到對應巡堂紀錄的節次，依應巡堂人員彙整，次數多的排前面。</div>';
+  if(!missedPatrols.length){
+    html += '<div class="empty">這個範圍內沒有漏巡的節次。</div>';
+  }else{
+    var missedByPerson = groupMissedByPerson(missedPatrols);
+    html += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:13px;">';
+    html += '<thead><tr style="text-align:left;border-bottom:1px solid var(--border);">'
+      + '<th style="padding:6px 8px;">應巡堂人員</th><th style="padding:6px 8px;">單位／職稱</th>'
+      + '<th style="padding:6px 8px;">未巡次數</th><th style="padding:6px 8px;">最近一次</th></tr></thead><tbody>';
+    html += missedByPerson.map(function(e){
+      var last = e.lastItem;
+      var lastLabel = last.date.slice(5).replace('-','/')+'（'+last.day+'）'+last.periodLabel;
+      return '<tr style="border-bottom:1px solid var(--border);">'
+        + '<td style="padding:6px 8px;font-weight:700;">'+esc(e.name)+'</td>'
+        + '<td style="padding:6px 8px;color:var(--ink-soft);">'+esc(e.dept)+esc(e.title)+'</td>'
+        + '<td style="padding:6px 8px;color:var(--bad);font-weight:700;">'+e.count+'</td>'
+        + '<td style="padding:6px 8px;">'+esc(lastLabel)+'</td></tr>';
+    }).join('');
+    html += '</tbody></table></div>';
+    if(!uiState.overviewShowMissedDetail){
+      html += '<div style="text-align:center;margin-top:8px;"><button type="button" class="btn-link" data-action="show-missed-detail">顯示明細清單（共 '+missedPatrols.length+' 筆）</button></div>';
+    }else{
+      html += '<div style="text-align:center;margin-top:8px;"><button type="button" class="btn-link" data-action="hide-missed-detail">收合明細清單</button></div>';
+      html += '<div style="margin-top:8px;">'+missedPatrols.map(missedItemHtml).join('')+'</div>';
+    }
+  }
   html += '</div>';
 
   html += '<div class="card">';
@@ -1436,6 +1479,8 @@ document.addEventListener('click', function(e){
   else if(action === 'refresh-data'){ fetchRecordsFromServer(true); }
   else if(action === 'show-all-attention'){ uiState.overviewShowAllAttention = true; render(); }
   else if(action === 'hide-old-attention'){ uiState.overviewShowAllAttention = false; render(); }
+  else if(action === 'show-missed-detail'){ uiState.overviewShowMissedDetail = true; render(); }
+  else if(action === 'hide-missed-detail'){ uiState.overviewShowMissedDetail = false; render(); }
 });
 
 render();
