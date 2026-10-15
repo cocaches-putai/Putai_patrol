@@ -46,7 +46,7 @@ h1,h2,h3{font-family:var(--font-display);margin:0;}
 .field .hint{font-size:12px;color:var(--ink-soft);margin-top:4px;}
 .row2{display:flex;gap:10px;}
 .row2 > *{flex:1;min-width:0;}
-input[type="date"],input[type="text"],select,textarea{width:100%;padding:9px 10px;border-radius:9px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink);font-family:var(--font-body);font-size:14px;}
+input[type="date"],input[type="month"],input[type="text"],select,textarea{width:100%;padding:9px 10px;border-radius:9px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink);font-family:var(--font-body);font-size:14px;}
 textarea{resize:vertical;min-height:64px;}
 input::placeholder,textarea::placeholder{color:var(--ink-soft);}
 .chip-grid{display:flex;flex-wrap:wrap;gap:6px;}
@@ -331,7 +331,11 @@ var uiState = {
   // 歷史紀錄預設先篩當月（避免一次把全部紀錄都帶進畫面），使用者仍可自行清空月份篩選看全部
   filter: {month: taipeiNow().dateStr.slice(0,7), className:'', name:'', dept:''},
   overviewDept: '',               // 總覽頁籤「老師總覽表」自己的部門篩選（跟歷史紀錄的篩選分開記，互不影響）
-  overviewShowAllAttention: false, // 待關注清單預設只顯示近 4 週，這個設 true 才會顯示全部
+  // 總覽頁籤「依月份檢視」：預設跟歷史紀錄一樣先帶當月，清空月份篩選（選到「全部」）才會看全部紀錄。
+  // 只影響「待關注清單」跟「老師總覽表」（選了月份後這兩個都只看那個月），最上面的 4 格關鍵數字摘要
+  // 維持原本「本月／近4週／全部累計」各自的既有定義不變，不跟著這個篩選走。
+  overviewMonth: taipeiNow().dateStr.slice(0,7),
+  overviewShowAllAttention: false, // 待關注清單預設只顯示近 4 週，這個設 true 才會顯示全部（只有「全部月份」時才看得到這個按鈕；選了特定月份就直接顯示該月全部，不需要展開）
   form: null,
   importState: null,
   loading: false,     // 正在向 Google 試算表資料庫要最新資料
@@ -867,6 +871,63 @@ function computeTeacherSummary(records){
   });
   return list;
 }
+// 「未巡堂」：輪值表（ROSTER）上有排定巡堂人員的節次，但找不到對應的巡堂紀錄，且這個節次已經過了
+// （還沒到的節次不算「漏」，只是還沒發生）。判斷「有沒有對應紀錄」直接沿用送出紀錄時就算好的
+// scheduled 欄位（date+period 都吻合、且 patrolName 跟輪值表當天該節次的人一致才會是 true），
+// 不用再重新比對一次文字是否相同，邏輯跟畫面上「輪值人員／主動巡堂」badge 是同一套標準。
+// monthStr 給 'YYYY-MM' 只掃那個月；留空掃整個學期（但一樣不會掃到還沒發生的未來）。
+function computeMissedPatrols(monthStr){
+  var today = taipeiNow().dateStr;
+  var nowHHMM = taipeiNow().hhmm;
+  var rangeStart = monthStr ? (monthStr + '-01') : SEMESTER_START;
+  var rangeEnd;
+  if(monthStr){
+    var y = Number(monthStr.slice(0,4)), m = Number(monthStr.slice(5,7));
+    var lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate(); // 當月最後一天
+    rangeEnd = monthStr + '-' + pad2(lastDay);
+  }else{
+    rangeEnd = SEMESTER_END;
+  }
+  if(rangeStart < SEMESTER_START) rangeStart = SEMESTER_START;
+  if(rangeEnd > SEMESTER_END) rangeEnd = SEMESTER_END;
+  if(rangeEnd > today) rangeEnd = today; // 還沒到的日期不算
+  if(rangeStart > rangeEnd) return [];
+
+  var scheduledSet = {};
+  RECORDS.forEach(function(r){
+    if(r.scheduled) scheduledSet[r.date + '|' + r.period] = true;
+  });
+
+  var missed = [];
+  var cursor = parseISODateUTC(rangeStart);
+  var endD = parseISODateUTC(rangeEnd);
+  while(cursor.getTime() <= endD.getTime()){
+    var dateStr = formatISODateUTC(cursor);
+    var info = dateToInfo(dateStr);
+    if(info && info.valid){
+      PERIODS.forEach(function(p){
+        var duty = dutyFor(info.weekType, info.day, p.key);
+        if(!duty) return; // 這節沒有排定巡堂人員，不算
+        if(dateStr === today && p.end > nowHHMM) return; // 今天還沒到的節次不算
+        if(!scheduledSet[dateStr + '|' + p.key]){
+          missed.push({date: dateStr, day: info.day, period: p.key, periodLabel: p.label, weekType: info.weekType, duty: duty});
+        }
+      });
+    }
+    cursor = addDaysUTC(cursor, 1);
+  }
+  missed.sort(function(a,b){ return (b.date + b.period).localeCompare(a.date + a.period); });
+  return missed;
+}
+function missedItemHtml(it){
+  var md = it.date.slice(5).replace('-', '/');
+  var html = '<div class="record">';
+  html += '<div class="record-head"><span class="record-class">'+esc(it.duty.name)+'</span><span class="record-when">'+md+'（'+esc(it.day)+'）'+esc(it.periodLabel)+'</span></div>';
+  html += '<div class="record-name">應排定巡堂：'+esc(it.duty.name)+'（'+esc(it.duty.dept)+esc(it.duty.title)+'）</div>';
+  html += '<div class="record-tags"><span class="tag tag-bad">未送出巡堂紀錄</span></div>';
+  html += '</div>';
+  return html;
+}
 function attentionItemHtml(it){
   var r = it.record;
   var periodLabel = (PERIODS.filter(function(p){return p.key===r.period;})[0]||{}).label || ('第'+r.period+'節');
@@ -911,42 +972,64 @@ function overviewStatsHtml(){
   return html;
 }
 function overviewHtml(){
-  // 「老師總覽」的部門篩選會連帶篩掉「待關注清單」裡不屬於該部門的紀錄，兩邊看的是同一個部門範圍，
+  // 「老師總覽」的月份／部門篩選會連帶篩掉「待關注清單」裡不屬於該範圍的紀錄，兩邊看的是同一個範圍，
   // 避免選了「國際部」結果待關注清單還是混著全校資料、看起來前後不一致。
+  var ovMonth = uiState.overviewMonth;
   var ovDept = uiState.overviewDept;
-  var scopedRecords = ovDept ? RECORDS.filter(function(r){ return recordDept(r) === ovDept; }) : RECORDS;
+  var monthScoped = ovMonth ? RECORDS.filter(function(r){ return r.date.slice(0,7) === ovMonth; }) : RECORDS;
+  var scopedRecords = ovDept ? monthScoped.filter(function(r){ return recordDept(r) === ovDept; }) : monthScoped;
   var allAttention = computeAttention(scopedRecords);
   var teachers = computeTeacherSummary(scopedRecords);
   var today = taipeiNow().dateStr;
-  var recentAttention = allAttention.filter(function(it){
-    var ageDays = daysBetweenISO(it.record.date, today);
-    return ageDays >= 0 && ageDays <= ATTENTION_WINDOW_DAYS;
-  });
-  var olderCount = allAttention.length - recentAttention.length;
-  var attentionToShow = uiState.overviewShowAllAttention ? allAttention : recentAttention;
+  var attentionToShow, olderCount;
+  if(ovMonth){
+    // 選了特定月份：待關注清單直接顯示該月全部符合條件的紀錄，不再套用「近4週」篩選跟「顯示全部」展開按鈕
+    // （清單本身已經被月份篩選框住，不會無限變長）。
+    attentionToShow = allAttention;
+    olderCount = 0;
+  }else{
+    var recentAttention = allAttention.filter(function(it){
+      var ageDays = daysBetweenISO(it.record.date, today);
+      return ageDays >= 0 && ageDays <= ATTENTION_WINDOW_DAYS;
+    });
+    olderCount = allAttention.length - recentAttention.length;
+    attentionToShow = uiState.overviewShowAllAttention ? allAttention : recentAttention;
+  }
+  // 未巡堂清單只跟著月份篩選走，不受部門篩選影響：輪值表排的是「哪位行政/巡堂人員該去巡」，
+  // 不是學生的部門分類，套部門篩選沒有意義。
+  var missedPatrols = computeMissedPatrols(ovMonth);
 
   var html = overviewStatsHtml();
   html += '<div class="card">';
   html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">';
-  html += '<h2 style="font-size:16px;">總覽部門篩選</h2>';
+  html += '<h2 style="font-size:16px;">總覽篩選</h2>';
   html += '<button type="button" class="btn-ghost" data-action="refresh-data" '+(uiState.loading?'disabled':'')+'>重新整理</button>';
   html += '</div>';
+  html += '<div class="row2">';
+  html += '<input type="month" id="ov-month" data-ovfilter="overviewMonth" value="'+esc(ovMonth)+'">';
   html += '<select id="ov-dept" data-ovfilter="overviewDept">';
   html += '<option value="">全部部門</option>';
   html += '<option value="regular"'+(ovDept==='regular'?' selected':'')+'>普通班（非辛班、非二外）</option>';
   html += '<option value="intl"'+(ovDept==='intl'?' selected':'')+'>國際部（辛班）</option>';
   html += '<option value="secondlang"'+(ovDept==='secondlang'?' selected':'')+'>外語中心（二外）</option>';
   html += '</select>';
-  html += '<div class="hint" style="margin-top:6px;">下面「待關注清單」跟「老師總覽」都只會看這個部門的資料。</div>';
+  html += '</div>';
+  html += '<div class="hint" style="margin-top:6px;">月份欄位清空可以看全部月份。下面「待關注清單」跟「老師總覽」都只會看這個月份／部門的資料；「未巡堂清單」只跟著月份走。</div>';
+  html += '</div>';
+
+  html += '<div class="card">';
+  html += '<h2 style="font-size:16px;margin-bottom:10px;">未巡堂清單</h2>';
+  html += '<div class="hint" style="margin-bottom:10px;">輪值表上排定要巡堂、但時間已經過了卻找不到對應巡堂紀錄的節次。</div>';
+  html += missedPatrols.length ? missedPatrols.map(missedItemHtml).join('') : '<div class="empty">這個範圍內沒有漏巡的節次。</div>';
   html += '</div>';
 
   html += '<div class="card">';
   html += '<h2 style="font-size:16px;margin-bottom:10px;">待關注清單</h2>';
-  html += '<div class="hint" style="margin-bottom:10px;">符合以下任一條件即列入：評分 1-2 分、缺點標籤含「老師遲進教室」或「老師控班不佳」；同一位任課老師近 4 週內累計 2 次以上會額外標記「重複」並排到最前面。預設只顯示近 4 週內的紀錄。</div>';
+  html += '<div class="hint" style="margin-bottom:10px;">符合以下任一條件即列入：評分 1-2 分、缺點標籤含「老師遲進教室」或「老師控班不佳」；同一位任課老師近 4 週內累計 2 次以上會額外標記「重複」並排到最前面。'+(ovMonth?'目前依月份篩選，顯示所選月份的全部紀錄。':'預設只顯示近 4 週內的紀錄。')+'</div>';
   html += attentionToShow.length ? attentionToShow.map(attentionItemHtml).join('') : '<div class="empty">目前沒有需要特別關注的紀錄。</div>';
-  if(!uiState.overviewShowAllAttention && olderCount > 0){
+  if(!ovMonth && !uiState.overviewShowAllAttention && olderCount > 0){
     html += '<div style="text-align:center;margin-top:8px;"><button type="button" class="btn-link" data-action="show-all-attention">顯示全部（含 '+olderCount+' 筆 4 週以前的紀錄）</button></div>';
-  }else if(uiState.overviewShowAllAttention && olderCount > 0){
+  }else if(!ovMonth && uiState.overviewShowAllAttention && olderCount > 0){
     html += '<div style="text-align:center;margin-top:8px;"><button type="button" class="btn-link" data-action="hide-old-attention">只看近 4 週</button></div>';
   }
   html += '</div>';
@@ -1310,6 +1393,7 @@ function bindInputs(){
       uiState[okey] = el.value;
       render();
     };
+    el.addEventListener('input', ohandler);
     el.addEventListener('change', ohandler);
   });
   var importFileInput = app.querySelector('#import-file-input');
