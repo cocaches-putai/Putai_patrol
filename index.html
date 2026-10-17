@@ -490,14 +490,18 @@ function onSubmit(){
     creatorToken: uiState.editingId ? (findRecord(uiState.editingId)||{}).creatorToken : DEVICE_TOKEN
   };
   var msg = uiState.editingId ? '已更新這筆巡堂紀錄。' : '已送出巡堂紀錄。';
-  // 先送到資料庫，確定存成功後才清空表單、跳到歷史紀錄頁——這樣萬一網路不通，
+  var wasEditing = !!uiState.editingId;
+  // 先送到資料庫，確定存成功後才清空表單——這樣萬一網路不通，
   // 剛剛填的內容還留在畫面上，不用重新輸入一次，按一次送出就能重試。
+  // 新增紀錄：送出成功後留在「填寫巡堂」頁籤（表單已清空、可以直接接著送下一筆），
+  // 靠畫面下方跳出的提示文字確認有存成功，不用每次都要再點一次「填寫巡堂」。
+  // 編輯既有紀錄：維持原本行為，送出成功後跳回「歷史紀錄」頁籤（本來就是從那邊點進來修改的）。
   saveOneRecord(rec, msg, function(success){
     if(success){
       uiState.editingId = null;
       uiState.form = freshForm(true);
       refreshSubjectTeacherSuggestion();
-      uiState.tab = 'history';
+      if(wasEditing) uiState.tab = 'history';
     }
   });
 }
@@ -1087,7 +1091,7 @@ function overviewHtml(){
     + '<button type="button" class="btn-link" data-action="toggle-missed-rule-hint" style="font-size:12px;font-weight:400;">ⓘ 補巡怎麼算？</button></h2>';
   html += '<div class="hint" style="margin-bottom:10px;">輪值表上排定要巡堂、但時間已經過了卻找不到對應巡堂紀錄的節次，依應巡堂人員彙整，次數多的排前面。</div>';
   if(uiState.overviewShowMissedRuleHint){
-    html += '<div class="hint" style="margin-bottom:10px;">補巡認定：原本排定的節次如果沒送紀錄，只要這位應巡堂人員在同一天或前後一天內，有送出任何一筆巡堂紀錄（不限節次），就算已經改時段補巡完成，不會列入下面這份清單。</div>';
+    html += '<div class="hint" style="margin-bottom:10px;">補巡認定：原本排定的節次如果沒送紀錄，只要這位應巡堂人員在同一週內（跟行事曆的非淨空週／淨空週區間一致），有送出任何一筆巡堂紀錄（不限節次、不限哪一天），就算已經改時段補巡完成，不會列入下面這份清單。</div>';
   }
   if(!missedPatrols.length){
     html += '<div class="empty">這個範圍內沒有漏巡的節次。</div>';
