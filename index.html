@@ -909,14 +909,36 @@ function computeMissedPatrols(monthStr){
   if(rangeStart > rangeEnd) return [];
 
   var scheduledSet = {};
-  // 補巡判斷用：老師有時候排定的節次真的有事去不了，會習慣改到同一天或前後一天的其他節次主動補巡，
-  // 不是每次都剛好補在原本排定的那一節。只要同一天或前後一天內，這位應巡堂人員有送出任何一筆巡堂紀錄
-  // （不限節次、也不限是不是輪值人員紀錄），就算這組巡堂義務已經用別的時段補過，不列入未巡堂清單。
+  // 補巡判斷用：老師有時候排定的節次真的有事去不了，會習慣改到同一週內其他時段主動補巡，不是每次都
+  // 剛好補在原本排定的那一節／那一天。只要「同一週」內，這位應巡堂人員有送出任何一筆巡堂紀錄（不限
+  // 節次、也不限是不是輪值人員紀錄），就算這組巡堂義務已經用別的時段補過，不列入未巡堂清單——老師願意
+  // 多巡堂本來就是好事，不用卡在剛好哪一天。
+  // 「同一週」直接用 WEEK_CALENDAR 本身切出來的那個區間（start~end），不是一般禮拜一到禮拜日的算法：
+  // 非淨空週的區間本來就含六、日（那兩天也排巡堂），淨空週的區間雖然形式上一樣是7天一段，但六、日
+  // 本來就沒有排定巡堂（學生不在校），所以共用同一套「區間」概念不會把兩種週混在一起算錯。
   var recordsByNameDate = {};
   RECORDS.forEach(function(r){
     if(r.scheduled) scheduledSet[r.date + '|' + r.period] = true;
     recordsByNameDate[r.patrolName + '|' + r.date] = true;
   });
+  function weekEntryFor(dateStr){
+    for(var i=0;i<WEEK_CALENDAR.length;i++){
+      var wk = WEEK_CALENDAR[i];
+      if(dateStr >= wk.start && dateStr <= wk.end) return wk;
+    }
+    return null;
+  }
+  function hasRecordSameWeek(name, dateStr){
+    var wk = weekEntryFor(dateStr);
+    if(!wk) return false;
+    var dcursor = parseISODateUTC(wk.start);
+    var dend = parseISODateUTC(wk.end);
+    while(dcursor.getTime() <= dend.getTime()){
+      if(recordsByNameDate[name + '|' + formatISODateUTC(dcursor)]) return true;
+      dcursor = addDaysUTC(dcursor, 1);
+    }
+    return false;
+  }
 
   var missed = [];
   var cursor = parseISODateUTC(rangeStart);
@@ -932,11 +954,7 @@ function computeMissedPatrols(monthStr){
         if(dateStr === today && p2.end > nowHHMM) return; // 這組節次今天還沒下課，不算
         var fulfilled = scheduledSet[dateStr + '|' + pair[0]] || scheduledSet[dateStr + '|' + pair[1]];
         if(!fulfilled){
-          var prevDate = formatISODateUTC(addDaysUTC(parseISODateUTC(dateStr), -1));
-          var nextDate = formatISODateUTC(addDaysUTC(parseISODateUTC(dateStr), 1));
-          fulfilled = recordsByNameDate[duty.name + '|' + dateStr]
-            || recordsByNameDate[duty.name + '|' + prevDate]
-            || recordsByNameDate[duty.name + '|' + nextDate];
+          fulfilled = hasRecordSameWeek(duty.name, dateStr);
         }
         if(!fulfilled){
           missed.push({date: dateStr, day: info.day, periodFrom: pair[0], periodLabel: '第'+pair[0]+'-'+pair[1]+'節', weekType: info.weekType, duty: duty});
