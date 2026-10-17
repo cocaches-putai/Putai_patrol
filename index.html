@@ -337,6 +337,7 @@ var uiState = {
   overviewMonth: taipeiNow().dateStr.slice(0,7),
   overviewShowAllAttention: false, // 待關注清單預設只顯示近 4 週，這個設 true 才會顯示全部（只有「全部月份」時才看得到這個按鈕；選了特定月份就直接顯示該月全部，不需要展開）
   overviewShowMissedDetail: false, // 未巡堂清單預設只顯示「依人員彙整」的小表，這個設 true 才會展開逐節明細清單（避免一個月上百筆排成一直條看不懂）
+  overviewShowMissedRuleHint: false, // 「補巡怎麼算」說明文字預設收起來，點 ⓘ 才展開，避免固定佔位影響閱讀
   form: null,
   importState: null,
   loading: false,     // 正在向 Google 試算表資料庫要最新資料
@@ -1064,8 +1065,12 @@ function overviewHtml(){
   html += '</div>';
 
   html += '<div class="card">';
-  html += '<h2 style="font-size:16px;margin-bottom:10px;">未巡堂清單</h2>';
+  html += '<h2 style="font-size:16px;margin-bottom:10px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">未巡堂清單'
+    + '<button type="button" class="btn-link" data-action="toggle-missed-rule-hint" style="font-size:12px;font-weight:400;">ⓘ 補巡怎麼算？</button></h2>';
   html += '<div class="hint" style="margin-bottom:10px;">輪值表上排定要巡堂、但時間已經過了卻找不到對應巡堂紀錄的節次，依應巡堂人員彙整，次數多的排前面。</div>';
+  if(uiState.overviewShowMissedRuleHint){
+    html += '<div class="hint" style="margin-bottom:10px;">補巡認定：原本排定的節次如果沒送紀錄，只要這位應巡堂人員在同一天或前後一天內，有送出任何一筆巡堂紀錄（不限節次），就算已經改時段補巡完成，不會列入下面這份清單。</div>';
+  }
   if(!missedPatrols.length){
     html += '<div class="empty">這個範圍內沒有漏巡的節次。</div>';
   }else{
@@ -1508,6 +1513,7 @@ document.addEventListener('click', function(e){
   else if(action === 'hide-old-attention'){ uiState.overviewShowAllAttention = false; render(); }
   else if(action === 'show-missed-detail'){ uiState.overviewShowMissedDetail = true; render(); }
   else if(action === 'hide-missed-detail'){ uiState.overviewShowMissedDetail = false; render(); }
+  else if(action === 'toggle-missed-rule-hint'){ uiState.overviewShowMissedRuleHint = !uiState.overviewShowMissedRuleHint; render(); }
 });
 
 render();
