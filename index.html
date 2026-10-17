@@ -908,8 +908,13 @@ function computeMissedPatrols(monthStr){
   if(rangeStart > rangeEnd) return [];
 
   var scheduledSet = {};
+  // 補巡判斷用：老師有時候排定的節次真的有事去不了，會習慣改到同一天或前後一天的其他節次主動補巡，
+  // 不是每次都剛好補在原本排定的那一節。只要同一天或前後一天內，這位應巡堂人員有送出任何一筆巡堂紀錄
+  // （不限節次、也不限是不是輪值人員紀錄），就算這組巡堂義務已經用別的時段補過，不列入未巡堂清單。
+  var recordsByNameDate = {};
   RECORDS.forEach(function(r){
     if(r.scheduled) scheduledSet[r.date + '|' + r.period] = true;
+    recordsByNameDate[r.patrolName + '|' + r.date] = true;
   });
 
   var missed = [];
@@ -925,6 +930,13 @@ function computeMissedPatrols(monthStr){
         var p2 = periodByKey(pair[1]);
         if(dateStr === today && p2.end > nowHHMM) return; // 這組節次今天還沒下課，不算
         var fulfilled = scheduledSet[dateStr + '|' + pair[0]] || scheduledSet[dateStr + '|' + pair[1]];
+        if(!fulfilled){
+          var prevDate = formatISODateUTC(addDaysUTC(parseISODateUTC(dateStr), -1));
+          var nextDate = formatISODateUTC(addDaysUTC(parseISODateUTC(dateStr), 1));
+          fulfilled = recordsByNameDate[duty.name + '|' + dateStr]
+            || recordsByNameDate[duty.name + '|' + prevDate]
+            || recordsByNameDate[duty.name + '|' + nextDate];
+        }
         if(!fulfilled){
           missed.push({date: dateStr, day: info.day, periodFrom: pair[0], periodLabel: '第'+pair[0]+'-'+pair[1]+'節', weekType: info.weekType, duty: duty});
         }
