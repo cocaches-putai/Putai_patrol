@@ -218,7 +218,9 @@ var WEEK_CALENDAR = [
 var DAY_OVERRIDES = {};
 // 學期中整天放假、學生不在校的日子（中秋節、國慶日、光復節、元旦）：即使落在理論上有效的
 // 巡堂日範圍內，也視為不排定巡堂（dateToInfo 回傳 valid:false），不會被課表帶出建議。
-var HOLIDAYS = ['2026-09-25', '2026-10-09', '2026-10-10', '2026-10-25', '2027-01-01'];
+// 依 115.10.13 版行事曆補上：9/28 教師節、10/26 光復節補假（兩天都是「學生返校」日，白天沒上課）。
+// 12/25 行憲紀念日雖是國定假日，但使用者 2026-10-27 確認學校照常上課、要巡堂，不列入。
+var HOLIDAYS = ['2026-09-25', '2026-09-28', '2026-10-09', '2026-10-10', '2026-10-25', '2026-10-26', '2027-01-01'];
 var DAYS = {'非淨空週':['一','二','三','四','五','六','日'], '淨空週':['一','二','三','四','五']};
 var DAY_LABELS_BY_UTC = ['日','一','二','三','四','五','六'];
 var PERIODS = [
@@ -893,6 +895,9 @@ var PERIOD_PAIRS = [['1','2'],['3','4'],['5','6'],['7','8']];
 // 2026-10-13 是巡堂紀錄從 Cowork Artifact 搬到 GitHub Pages 正式上線的日期，但那天系統還在更新中，
 // 使用者確認改成從隔天 2026-10-14 開始算未巡堂（之前不管是舊 Artifact 時期、更早、還是上線當天都不計入）。
 var MISSED_PATROL_START_DATE = '2026-10-14';
+// 學期最後一週（1/17–1/23：期末考、寒輔開始、大學學測）使用者 2026-10-27 決定先不巡堂，
+// 未巡堂只算到前一週 1/16。只截斷未巡堂清單，不動 WEEK_CALENDAR，那週有人主動巡堂仍可正常送紀錄。
+var MISSED_PATROL_END_DATE = '2027-01-16';
 function periodByKey(key){ return PERIODS.filter(function(p){ return p.key === key; })[0]; }
 function computeMissedPatrols(monthStr){
   var today = taipeiNow().dateStr;
@@ -909,6 +914,7 @@ function computeMissedPatrols(monthStr){
   if(rangeStart < SEMESTER_START) rangeStart = SEMESTER_START;
   if(rangeStart < MISSED_PATROL_START_DATE) rangeStart = MISSED_PATROL_START_DATE;
   if(rangeEnd > SEMESTER_END) rangeEnd = SEMESTER_END;
+  if(rangeEnd > MISSED_PATROL_END_DATE) rangeEnd = MISSED_PATROL_END_DATE;
   if(rangeEnd > today) rangeEnd = today; // 還沒到的日期不算
   if(rangeStart > rangeEnd) return [];
 
